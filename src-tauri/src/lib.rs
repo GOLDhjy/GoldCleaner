@@ -64,7 +64,10 @@ struct CleanupResult {
 #[serde(rename_all = "camelCase")]
 struct CleanRequest {
     ids: Vec<String>,
+    #[serde(default)]
     excluded_paths: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    included_paths: HashMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -181,14 +184,32 @@ fn list_category_items_sync(id: String, limit: usize) -> Result<CategoryItems, S
 
 fn clean_categories_sync(request: CleanRequest) -> Result<CleanupResult, String> {
     let categories = build_categories();
-    let id_set: HashSet<String> = request.ids.into_iter().collect();
+    let CleanRequest {
+        ids,
+        excluded_paths,
+        included_paths,
+    } = request;
+    let id_set: HashSet<String> = ids.into_iter().collect();
     let mut deleted_bytes = 0;
     let mut deleted_count = 0;
     let mut failed = Vec::new();
 
-    for def in categories.iter().filter(|def| id_set.contains(def.id)) {
-        let excluded = request
-            .excluded_paths
+    for def in categories.iter() {
+        let included = included_paths
+            .get(def.id)
+            .cloned()
+            .unwrap_or_default();
+        if !included.is_empty() {
+            let result = clean_included_paths(def, &included);
+            deleted_bytes += result.deleted_bytes;
+            deleted_count += result.deleted_count;
+            failed.extend(result.failed);
+            continue;
+        }
+        if !id_set.contains(def.id) {
+            continue;
+        }
+        let excluded = excluded_paths
             .get(def.id)
             .map(normalize_exclusions)
             .unwrap_or_default();
@@ -363,6 +384,81 @@ fn clean_category(def: &CategoryDef, excluded: &HashSet<String>) -> CleanupResul
     }
 }
 
+fn clean_included_paths(def: &CategoryDef, included: &[String]) -> CleanupResult {
+    let cutoff = cutoff_time(&def.kind);
+    let mut deleted_bytes = 0;
+    let mut deleted_count = 0;
+    let mut failed = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path_str in included {
+        let normalized = normalize_path_str(path_str);
+        if !seen.insert(normalized) {
+            continue;
+        }
+        let path = Path::new(path_str);
+        if !is_within_roots(def, path) {
+            failed.push(CleanupError {
+                path: path_str.clone(),
+                message: "Path is outside cleanup scope.".to_string(),
+            });
+            continue;
+        }
+        let metadata = match path.metadata() {
+            Ok(meta) => meta,
+            Err(err) => {
+                failed.push(CleanupError {
+                    path: path_str.clone(),
+                    message: err.to_string(),
+                });
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            failed.push(CleanupError {
+                path: path_str.clone(),
+                message: "Path is a directory.".to_string(),
+            });
+            continue;
+        }
+        if !matches_cutoff(&metadata, cutoff) {
+            continue;
+        }
+        let size = metadata.len();
+        if let Err(err) = fs::remove_file(path) {
+            failed.push(CleanupError {
+                path: path_str.clone(),
+                message: err.to_string(),
+            });
+            continue;
+        }
+        deleted_bytes += size;
+        deleted_count += 1;
+    }
+
+    CleanupResult {
+        deleted_bytes,
+        deleted_count,
+        failed,
+    }
+}
+
+fn is_within_roots(def: &CategoryDef, path: &Path) -> bool {
+    let target = normalize_path(path);
+    def.roots.iter().any(|root| {
+        let root_norm = normalize_path(root);
+        if root.is_file() {
+            return target == root_norm;
+        }
+        let prefix = if root_norm.ends_with('\\') {
+            root_norm.clone()
+        } else {
+            format!("{}\\", root_norm)
+        };
+        target == root_norm || target.starts_with(&prefix)
+    })
+}
+
 fn delete_file(
     path: &Path,
     cutoff: Option<SystemTime>,
@@ -498,7 +594,18 @@ fn build_categories() -> Vec<CategoryDef> {
         ]);
     }
 
-    let recycle_bin = PathBuf::from(format!("{}\\$Recycle.Bin", system_drive));
+    let recycle_bins = {
+        let disks = Disks::new_with_refreshed_list();
+        let mut roots = disks
+            .list()
+            .iter()
+            .map(|disk| disk.mount_point().join("$Recycle.Bin"))
+            .collect::<Vec<_>>();
+        if roots.is_empty() {
+            roots.push(PathBuf::from(format!("{}\\$Recycle.Bin", system_drive)));
+        }
+        roots
+    };
     let windows_old = PathBuf::from(format!("{}\\Windows.old", system_drive));
 
     let download_root = user_profile
@@ -521,7 +628,7 @@ fn build_categories() -> Vec<CategoryDef> {
             title: "回收站",
             description: "清空回收站中的所有文件",
             kind: CategoryKind::Standard,
-            roots: dedup_paths(vec![recycle_bin]),
+            roots: dedup_paths(recycle_bins),
             cleanup_dirs: true,
         },
         CategoryDef {

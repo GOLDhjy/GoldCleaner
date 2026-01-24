@@ -89,6 +89,12 @@ function App() {
   const [excludedSizes, setExcludedSizes] = useState<Record<string, number>>(
     {},
   );
+  const [includedPaths, setIncludedPaths] = useState<Record<string, string[]>>(
+    {},
+  );
+  const [includedSizes, setIncludedSizes] = useState<Record<string, number>>(
+    {},
+  );
 
   useEffect(() => {
     invoke<DiskInfo>("get_disk_info")
@@ -99,21 +105,40 @@ function App() {
   }, []);
 
   const selectedSize = useMemo(() => {
-    return selectedIds.reduce((sum, id) => {
-      const category = categories.find((item) => item.id === id);
-      if (!category) return sum;
-      const excluded = excludedSizes[id] ?? 0;
-      return sum + Math.max(0, category.sizeBytes - excluded);
+    return categories.reduce((sum, category) => {
+      if (selectedIds.includes(category.id)) {
+        const excluded = excludedSizes[category.id] ?? 0;
+        return sum + Math.max(0, category.sizeBytes - excluded);
+      }
+      const included = includedSizes[category.id] ?? 0;
+      return sum + included;
     }, 0);
-  }, [selectedIds, categories, excludedSizes]);
+  }, [selectedIds, categories, excludedSizes, includedSizes]);
 
   const allSelected =
     categories.length > 0 && selectedIds.length === categories.length;
+
+  const selectedCategoryCount = useMemo(() => {
+    const set = new Set(selectedIds);
+    for (const [id, paths] of Object.entries(includedPaths)) {
+      if (paths.length > 0) {
+        set.add(id);
+      }
+    }
+    return set.size;
+  }, [selectedIds, includedPaths]);
+
+  const hasSelection = selectedCategoryCount > 0;
 
   const excludedCount = useMemo(() => {
     if (!activeCategory) return 0;
     return excludedPaths[activeCategory.id]?.length ?? 0;
   }, [activeCategory, excludedPaths]);
+
+  const includedCount = useMemo(() => {
+    if (!activeCategory) return 0;
+    return includedPaths[activeCategory.id]?.length ?? 0;
+  }, [activeCategory, includedPaths]);
 
   const handleScan = async () => {
     setScanning(true);
@@ -130,6 +155,8 @@ function App() {
       setSelectedIds([]);
       setExcludedPaths({});
       setExcludedSizes({});
+      setIncludedPaths({});
+      setIncludedSizes({});
       setScanStatus(`扫描完成，发现 ${sorted.length} 项可清理`);
     } catch (err) {
       setError(String(err));
@@ -143,6 +170,16 @@ function App() {
     setSelectedIds((prev) =>
       prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id],
     );
+    setIncludedPaths((prev) => {
+      if (!prev[id]) return prev;
+      const { [id]: _, ...rest } = prev;
+      return rest;
+    });
+    setIncludedSizes((prev) => {
+      if (prev[id] === undefined) return prev;
+      const { [id]: _, ...rest } = prev;
+      return rest;
+    });
   };
 
   const toggleSelectAll = () => {
@@ -151,6 +188,8 @@ function App() {
       return;
     }
     setSelectedIds(categories.map((item) => item.id));
+    setIncludedPaths({});
+    setIncludedSizes({});
   };
 
   const openDetails = async (category: CleanupCategory) => {
@@ -188,20 +227,54 @@ function App() {
     }
   };
 
-  const toggleExclude = (categoryId: string, item: CleanupItem) => {
-    setExcludedPaths((prev) => {
+  const handleDetailToggle = (
+    categoryId: string,
+    item: CleanupItem,
+    nextChecked: boolean,
+    parentSelected: boolean,
+    isExcluded: boolean,
+    isIncluded: boolean,
+  ) => {
+    if (parentSelected) {
+      setExcludedPaths((prev) => {
+        const set = new Set(prev[categoryId] ?? []);
+        if (nextChecked) {
+          set.delete(item.path);
+        } else {
+          set.add(item.path);
+        }
+        setExcludedSizes((sizes) => {
+          const current = sizes[categoryId] ?? 0;
+          const delta =
+            nextChecked && isExcluded
+              ? -item.sizeBytes
+              : !nextChecked && !isExcluded
+                ? item.sizeBytes
+                : 0;
+          const nextValue = Math.max(0, current + delta);
+          return { ...sizes, [categoryId]: nextValue };
+        });
+        return { ...prev, [categoryId]: Array.from(set) };
+      });
+      return;
+    }
+
+    setIncludedPaths((prev) => {
       const set = new Set(prev[categoryId] ?? []);
-      const wasExcluded = set.has(item.path);
-      if (wasExcluded) {
-        set.delete(item.path);
-      } else {
+      if (nextChecked) {
         set.add(item.path);
+      } else {
+        set.delete(item.path);
       }
-      setExcludedSizes((sizes) => {
+      setIncludedSizes((sizes) => {
         const current = sizes[categoryId] ?? 0;
-        const nextValue = wasExcluded
-          ? Math.max(0, current - item.sizeBytes)
-          : current + item.sizeBytes;
+        const delta =
+          nextChecked && !isIncluded
+            ? item.sizeBytes
+            : !nextChecked && isIncluded
+              ? -item.sizeBytes
+              : 0;
+        const nextValue = Math.max(0, current + delta);
         return { ...sizes, [categoryId]: nextValue };
       });
       return { ...prev, [categoryId]: Array.from(set) };
@@ -209,7 +282,7 @@ function App() {
   };
 
   const handleClean = async () => {
-    if (selectedIds.length === 0 || cleaning) return;
+    if (!hasSelection || cleaning) return;
     setCleaning(true);
     setScanStatus("正在清理中，请保持应用打开…");
     setError("");
@@ -218,6 +291,7 @@ function App() {
         request: {
           ids: selectedIds,
           excludedPaths,
+          includedPaths,
         },
       });
       const summary = `清理完成，删除 ${result.deletedCount} 项，释放 ${formatBytes(
@@ -231,6 +305,8 @@ function App() {
       const updated = await invoke<CleanupCategory[]>("scan_cleanup_items");
       setCategories(updated);
       setSelectedIds([]);
+      setIncludedPaths({});
+      setIncludedSizes({});
     } catch (err) {
       setError(String(err));
       setScanStatus("清理失败，请检查权限后重试");
@@ -241,6 +317,8 @@ function App() {
 
   const handleCancel = () => {
     setSelectedIds([]);
+    setIncludedPaths({});
+    setIncludedSizes({});
     setScanStatus("");
   };
 
@@ -248,6 +326,15 @@ function App() {
     if (!activeCategory) return new Set<string>();
     return new Set(excludedPaths[activeCategory.id] ?? []);
   }, [activeCategory, excludedPaths]);
+
+  const includedSet = useMemo(() => {
+    if (!activeCategory) return new Set<string>();
+    return new Set(includedPaths[activeCategory.id] ?? []);
+  }, [activeCategory, includedPaths]);
+
+  const parentSelected = activeCategory
+    ? selectedIds.includes(activeCategory.id)
+    : false;
 
   const usedPercent = diskInfo?.usedPercent ?? 0;
 
@@ -317,7 +404,7 @@ function App() {
               <div>
                 <h3>清理项目</h3>
                 <p>
-                  已选择 {selectedIds.length} 项，可释放{" "}
+                  已选择 {selectedCategoryCount} 项，可释放{" "}
                   {formatBytes(selectedSize)}
                 </p>
               </div>
@@ -384,7 +471,7 @@ function App() {
             <div className="action-bar">
               <div>
                 <div className="action-summary">
-                  已选择 {selectedIds.length} 项，可释放{" "}
+                  已选择 {selectedCategoryCount} 项，可释放{" "}
                   {formatBytes(selectedSize)}
                 </div>
                 {scanStatus && <div className="action-status">{scanStatus}</div>}
@@ -403,7 +490,7 @@ function App() {
                   className="primary-button"
                   type="button"
                   onClick={handleClean}
-                  disabled={selectedIds.length === 0 || cleaning}
+                  disabled={!hasSelection || cleaning}
                 >
                   {cleaning ? "清理中…" : "开始清理"}
                 </button>
@@ -420,7 +507,10 @@ function App() {
               <div>
                 <h3>{activeCategory.title}</h3>
                 <p>
-                  {activeCategory.description} · 已排除 {excludedCount} 项
+                  {activeCategory.description} ·{" "}
+                  {parentSelected
+                    ? `已排除 ${excludedCount} 项`
+                    : `已选择 ${includedCount} 项`}
                 </p>
               </div>
               <button
@@ -440,14 +530,23 @@ function App() {
               <div className="details-list">
                 {detailItems.map((item) => {
                   const isExcluded = excludedSet.has(item.path);
+                  const isIncluded = includedSet.has(item.path);
+                  const isChecked = parentSelected ? !isExcluded : isIncluded;
                   return (
                     <div key={item.path} className="details-item">
                       <label className="details-checkbox">
                         <input
                           type="checkbox"
-                          checked={!isExcluded}
+                          checked={isChecked}
                           onChange={() =>
-                            toggleExclude(activeCategory.id, item)
+                            handleDetailToggle(
+                              activeCategory.id,
+                              item,
+                              !isChecked,
+                              parentSelected,
+                              isExcluded,
+                              isIncluded,
+                            )
                           }
                         />
                         <span>清理</span>

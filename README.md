@@ -39,19 +39,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-## 图标更新
-
-```bash
-npx tauri icon "E:\GoldCleaner\GoldCleanerIcon.png"
-```
-
 ## 结构说明
 
 - `src/`：React UI
 - `src-tauri/`：Rust 后端与 Tauri 配置
-
-## 推荐开发环境
-
-- [VS Code](https://code.visualstudio.com/)
-- [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode)
-- [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)

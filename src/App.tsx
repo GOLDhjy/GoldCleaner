@@ -130,6 +130,10 @@ function App() {
 
   const hasSelection = selectedCategoryCount > 0;
 
+  const sortedCategories = useMemo(() => {
+    return [...categories].sort((a, b) => b.sizeBytes - a.sizeBytes);
+  }, [categories]);
+
   const excludedCount = useMemo(() => {
     if (!activeCategory) return 0;
     return excludedPaths[activeCategory.id]?.length ?? 0;
@@ -286,12 +290,22 @@ function App() {
     setCleaning(true);
     setScanStatus("正在清理中，请保持应用打开…");
     setError("");
+    const categoryStats = categories.reduce<
+      Record<string, { sizeBytes: number; fileCount: number }>
+    >((acc, category) => {
+      acc[category.id] = {
+        sizeBytes: category.sizeBytes,
+        fileCount: category.fileCount,
+      };
+      return acc;
+    }, {});
     try {
       const result = await invoke<CleanupResult>("clean_categories", {
         request: {
           ids: selectedIds,
           excludedPaths,
           includedPaths,
+          categoryStats,
         },
       });
       const summary = `清理完成，删除 ${result.deletedCount} 项，释放 ${formatBytes(
@@ -418,7 +432,7 @@ function App() {
             </div>
 
             <div className="cleanup-list">
-              {categories.map((category, index) => {
+              {sortedCategories.map((category, index) => {
                 const selected = selectedIds.includes(category.id);
                 const accent =
                   CATEGORY_ACCENTS[category.id] ?? "var(--accent)";

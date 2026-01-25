@@ -6,7 +6,16 @@ use std::{
     path::{Path, PathBuf},
     time::{Duration, SystemTime},
 };
+#[cfg(target_os = "windows")]
+use std::ffi::OsStr;
+#[cfg(target_os = "windows")]
+use std::os::windows::ffi::OsStrExt;
 use sysinfo::Disks;
+#[cfg(target_os = "windows")]
+use windows_sys::Win32::UI::Shell::{
+    SHEmptyRecycleBinW, SHQueryRecycleBinW, SHQUERYRBINFO, SHERB_NOCONFIRMATION,
+    SHERB_NOPROGRESSUI, SHERB_NOSOUND,
+};
 use walkdir::WalkDir;
 use tauri::Manager;
 
@@ -62,12 +71,27 @@ struct CleanupResult {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct CategoryStats {
+    size_bytes: u64,
+    file_count: u64,
+}
+
+#[cfg(target_os = "windows")]
+struct RecycleBinStats {
+    deleted_bytes: u64,
+    deleted_count: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct CleanRequest {
     ids: Vec<String>,
     #[serde(default)]
     excluded_paths: HashMap<String, Vec<String>>,
     #[serde(default)]
     included_paths: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    category_stats: HashMap<String, CategoryStats>,
 }
 
 #[derive(Clone)]
@@ -188,6 +212,7 @@ fn clean_categories_sync(request: CleanRequest) -> Result<CleanupResult, String>
         ids,
         excluded_paths,
         included_paths,
+        category_stats,
     } = request;
     let id_set: HashSet<String> = ids.into_iter().collect();
     let mut deleted_bytes = 0;
@@ -213,7 +238,8 @@ fn clean_categories_sync(request: CleanRequest) -> Result<CleanupResult, String>
             .get(def.id)
             .map(normalize_exclusions)
             .unwrap_or_default();
-        let result = clean_category(def, &excluded);
+        let stats = category_stats.get(def.id);
+        let result = clean_category(def, &excluded, stats);
         deleted_bytes += result.deleted_bytes;
         deleted_count += result.deleted_count;
         failed.extend(result.failed);
@@ -326,7 +352,17 @@ fn list_category_items_for(def: &CategoryDef, limit: usize) -> CategoryItems {
     CategoryItems { items, has_more }
 }
 
-fn clean_category(def: &CategoryDef, excluded: &HashSet<String>) -> CleanupResult {
+fn clean_category(
+    def: &CategoryDef,
+    excluded: &HashSet<String>,
+    stats: Option<&CategoryStats>,
+) -> CleanupResult {
+    if def.id == "recycle_bin" && excluded.is_empty() {
+        return clean_recycle_bin_fast();
+    }
+    if excluded.is_empty() && should_fast_clear(def) {
+        return clean_category_fast_dirs(def, stats);
+    }
     let cutoff = cutoff_time(&def.kind);
     let mut deleted_bytes = 0;
     let mut deleted_count = 0;
@@ -441,6 +477,128 @@ fn clean_included_paths(def: &CategoryDef, included: &[String]) -> CleanupResult
         deleted_count,
         failed,
     }
+}
+
+fn should_fast_clear(def: &CategoryDef) -> bool {
+    matches!(def.id, "system_cache" | "browser_cache") && def.cleanup_dirs
+}
+
+fn clean_category_fast_dirs(def: &CategoryDef, stats: Option<&CategoryStats>) -> CleanupResult {
+    let mut failed = Vec::new();
+    let mut all_ok = true;
+
+    for root in &def.roots {
+        if !root.exists() {
+            continue;
+        }
+        let result = if root.is_file() {
+            fs::remove_file(root).map_err(|err| err.to_string())
+        } else {
+            fs::remove_dir_all(root).map_err(|err| err.to_string())
+        };
+        if let Err(message) = result {
+            all_ok = false;
+            failed.push(CleanupError {
+                path: root.to_string_lossy().to_string(),
+                message,
+            });
+        }
+    }
+
+    let (deleted_bytes, deleted_count) = if all_ok {
+        stats
+            .map(|value| (value.size_bytes, value.file_count))
+            .unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+
+    CleanupResult {
+        deleted_bytes,
+        deleted_count,
+        failed,
+    }
+}
+
+fn clean_recycle_bin_fast() -> CleanupResult {
+    #[cfg(target_os = "windows")]
+    {
+        let stats = query_recycle_bin_stats(None).unwrap_or(RecycleBinStats {
+            deleted_bytes: 0,
+            deleted_count: 0,
+        });
+        let mut failed = Vec::new();
+        if let Err(err) = empty_recycle_bin(None) {
+            failed.push(CleanupError {
+                path: "$Recycle.Bin".to_string(),
+                message: err,
+            });
+            return CleanupResult {
+                deleted_bytes: 0,
+                deleted_count: 0,
+                failed,
+            };
+        }
+        CleanupResult {
+            deleted_bytes: stats.deleted_bytes,
+            deleted_count: stats.deleted_count,
+            failed,
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        CleanupResult {
+            deleted_bytes: 0,
+            deleted_count: 0,
+            failed: vec![CleanupError {
+                path: "$Recycle.Bin".to_string(),
+                message: "Recycle bin fast clear is only supported on Windows.".to_string(),
+            }],
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn query_recycle_bin_stats(root: Option<&Path>) -> Result<RecycleBinStats, String> {
+    let mut info = SHQUERYRBINFO {
+        cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+        i64Size: 0,
+        i64NumItems: 0,
+    };
+    let wide = root.map(to_wide_null);
+    let root_ptr = wide
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
+    let hr = unsafe { SHQueryRecycleBinW(root_ptr, &mut info) };
+    if hr < 0 {
+        return Err(format!("SHQueryRecycleBinW failed: 0x{:08X}", hr as u32));
+    }
+    Ok(RecycleBinStats {
+        deleted_bytes: info.i64Size as u64,
+        deleted_count: info.i64NumItems as u64,
+    })
+}
+
+#[cfg(target_os = "windows")]
+fn empty_recycle_bin(root: Option<&Path>) -> Result<(), String> {
+    let wide = root.map(to_wide_null);
+    let root_ptr = wide
+        .as_ref()
+        .map_or(std::ptr::null(), |value| value.as_ptr());
+    let flags = SHERB_NOCONFIRMATION | SHERB_NOPROGRESSUI | SHERB_NOSOUND;
+    let hr = unsafe { SHEmptyRecycleBinW(std::ptr::null_mut(), root_ptr, flags) };
+    if hr < 0 {
+        return Err(format!("SHEmptyRecycleBinW failed: 0x{:08X}", hr as u32));
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn to_wide_null(path: &Path) -> Vec<u16> {
+    OsStr::new(path)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 fn is_within_roots(def: &CategoryDef, path: &Path) -> bool {

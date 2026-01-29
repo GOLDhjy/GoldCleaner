@@ -49,6 +49,17 @@ struct CleanupItem {
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
+struct LargeItem {
+    path: String,
+    name: String,
+    size_bytes: u64,
+    is_dir: bool,
+    suspicious: bool,
+    category_id: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 struct CategoryItems {
     items: Vec<CleanupItem>,
     has_more: bool,
@@ -127,6 +138,19 @@ async fn scan_cleanup_items() -> Result<Vec<CleanupCategory>, String> {
 }
 
 #[tauri::command]
+async fn scan_large_items(limit: Option<u32>, min_size_mb: Option<u64>) -> Result<Vec<LargeItem>, String> {
+    ensure_windows()?;
+    let limit = limit.unwrap_or(200).min(1000) as usize;
+    let min_size_bytes = min_size_mb
+        .unwrap_or(1024)
+        .saturating_mul(1024)
+        .saturating_mul(1024);
+    tauri::async_runtime::spawn_blocking(move || scan_large_items_sync(limit, min_size_bytes))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 async fn list_category_items(id: String, limit: Option<u32>) -> Result<CategoryItems, String> {
     ensure_windows()?;
     let limit = limit.unwrap_or(200).min(2000) as usize;
@@ -141,6 +165,15 @@ async fn clean_categories(request: CleanRequest) -> Result<CleanupResult, String
     tauri::async_runtime::spawn_blocking(move || clean_categories_sync(request))
         .await
         .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn clean_large_items(paths: Vec<String>) -> Result<CleanupResult, String> {
+    ensure_windows()?;
+    let result = tauri::async_runtime::spawn_blocking(move || clean_large_items_sync(paths))
+        .await
+        .map_err(|err| err.to_string())?;
+    Ok(result)
 }
 
 fn ensure_windows() -> Result<(), String> {
@@ -197,6 +230,82 @@ fn scan_cleanup_items_sync() -> Result<Vec<CleanupCategory>, String> {
     Ok(items)
 }
 
+fn scan_large_items_sync(limit: usize, min_size_bytes: u64) -> Result<Vec<LargeItem>, String> {
+    let root = system_drive_mount();
+    let categories = build_categories();
+    let keywords = ["log", "cache", "temp", "tmp"];
+    let mut large_files = Vec::new();
+    let mut suspicious_dirs: HashMap<String, (PathBuf, u64)> = HashMap::new();
+
+    for entry in WalkDir::new(&root)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let metadata = match entry.metadata() {
+            Ok(value) => value,
+            Err(_) => continue,
+        };
+        let size = metadata.len();
+        let path = entry.path();
+
+        if size >= min_size_bytes {
+            let name = entry.file_name().to_string_lossy().to_string();
+            let path_text = path.to_string_lossy();
+            let suspicious =
+                contains_keyword(&name, &keywords) || contains_keyword(&path_text, &keywords);
+            let category_id = match_category_id(path, &metadata, &categories);
+            large_files.push(LargeItem {
+                path: path.to_string_lossy().to_string(),
+                name,
+                size_bytes: size,
+                is_dir: false,
+                suspicious,
+                category_id,
+            });
+        }
+
+        if let Some(suspicious_dir) = find_suspicious_dir(path.parent(), &keywords) {
+            let key = normalize_path(&suspicious_dir);
+            let entry = suspicious_dirs
+                .entry(key)
+                .or_insert((suspicious_dir, 0));
+            entry.1 = entry.1.saturating_add(size);
+        }
+    }
+
+    let mut large_dirs = Vec::new();
+    for (_, (path, size)) in suspicious_dirs {
+        if size < min_size_bytes {
+            continue;
+        }
+        let name = path
+            .file_name()
+            .map(|value| value.to_string_lossy().to_string())
+            .unwrap_or_else(|| path.to_string_lossy().to_string());
+        large_dirs.push(LargeItem {
+            path: path.to_string_lossy().to_string(),
+            name,
+            size_bytes: size,
+            is_dir: true,
+            suspicious: true,
+            category_id: None,
+        });
+    }
+
+    let mut items = Vec::with_capacity(large_files.len() + large_dirs.len());
+    items.extend(large_files);
+    items.extend(large_dirs);
+    items.sort_by(|a, b| b.size_bytes.cmp(&a.size_bytes));
+    if items.len() > limit {
+        items.truncate(limit);
+    }
+    Ok(items)
+}
+
 fn list_category_items_sync(id: String, limit: usize) -> Result<CategoryItems, String> {
     let categories = build_categories();
     let def = categories
@@ -250,6 +359,75 @@ fn clean_categories_sync(request: CleanRequest) -> Result<CleanupResult, String>
         deleted_count,
         failed,
     })
+}
+
+fn clean_large_items_sync(paths: Vec<String>) -> CleanupResult {
+    let root = system_drive_mount();
+    let mut deleted_bytes: u64 = 0;
+    let mut deleted_count: u64 = 0;
+    let mut failed = Vec::new();
+    let mut seen = HashSet::new();
+
+    for path_str in paths {
+        let normalized = normalize_path_str(&path_str);
+        if !seen.insert(normalized) {
+            continue;
+        }
+        let path = Path::new(&path_str);
+        if !is_within_root(&root, path) {
+            failed.push(CleanupError {
+                path: path_str.clone(),
+                message: "Path is outside scan scope.".to_string(),
+            });
+            continue;
+        }
+        if path_eq_ignore_case(path, &root) {
+            failed.push(CleanupError {
+                path: path_str.clone(),
+                message: "Refusing to delete drive root.".to_string(),
+            });
+            continue;
+        }
+        let metadata = match path.metadata() {
+            Ok(meta) => meta,
+            Err(err) => {
+                failed.push(CleanupError {
+                    path: path_str.clone(),
+                    message: err.to_string(),
+                });
+                continue;
+            }
+        };
+        if metadata.is_dir() {
+            let (size, count) = dir_metrics(path);
+            if let Err(err) = fs::remove_dir_all(path) {
+                failed.push(CleanupError {
+                    path: path_str.clone(),
+                    message: err.to_string(),
+                });
+                continue;
+            }
+            deleted_bytes = deleted_bytes.saturating_add(size);
+            deleted_count = deleted_count.saturating_add(count);
+        } else {
+            let size = metadata.len();
+            if let Err(err) = fs::remove_file(path) {
+                failed.push(CleanupError {
+                    path: path_str.clone(),
+                    message: err.to_string(),
+                });
+                continue;
+            }
+            deleted_bytes = deleted_bytes.saturating_add(size);
+            deleted_count = deleted_count.saturating_add(1);
+        }
+    }
+
+    CleanupResult {
+        deleted_bytes,
+        deleted_count,
+        failed,
+    }
 }
 
 struct CategoryScan {
@@ -703,6 +881,74 @@ fn normalize_path_str(path: &str) -> String {
     path.replace('/', "\\").to_lowercase()
 }
 
+fn is_within_root(root: &Path, path: &Path) -> bool {
+    let root_norm = normalize_path(root);
+    let target = normalize_path(path);
+    if root.is_file() {
+        return target == root_norm;
+    }
+    let prefix = if root_norm.ends_with('\\') {
+        root_norm
+    } else {
+        format!("{}\\", root_norm)
+    };
+    target == prefix.trim_end_matches('\\') || target.starts_with(&prefix)
+}
+
+fn contains_keyword(text: &str, keywords: &[&str]) -> bool {
+    let lowered = text.to_lowercase();
+    keywords.iter().any(|keyword| lowered.contains(keyword))
+}
+
+fn find_suspicious_dir(path: Option<&Path>, keywords: &[&str]) -> Option<PathBuf> {
+    let mut current = path?;
+    loop {
+        if let Some(name) = current.file_name().and_then(|value| value.to_str()) {
+            if contains_keyword(name, keywords) {
+                return Some(current.to_path_buf());
+            }
+        }
+        current = current.parent()?;
+    }
+}
+
+fn match_category_id(
+    path: &Path,
+    metadata: &fs::Metadata,
+    categories: &[CategoryDef],
+) -> Option<String> {
+    for def in categories {
+        if !is_within_roots(def, path) {
+            continue;
+        }
+        let cutoff = cutoff_time(&def.kind);
+        if !matches_cutoff(metadata, cutoff) {
+            continue;
+        }
+        return Some(def.id.to_string());
+    }
+    None
+}
+
+fn dir_metrics(path: &Path) -> (u64, u64) {
+    let mut size: u64 = 0;
+    let mut count: u64 = 0;
+    for entry in WalkDir::new(path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|entry| entry.ok())
+    {
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        if let Ok(metadata) = entry.metadata() {
+            size = size.saturating_add(metadata.len());
+            count = count.saturating_add(1);
+        }
+    }
+    (size, count)
+}
+
 fn path_eq_ignore_case(left: &Path, right: &Path) -> bool {
     normalize_path(left) == normalize_path(right)
 }
@@ -878,8 +1124,10 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_disk_info,
             scan_cleanup_items,
+            scan_large_items,
             list_category_items,
-            clean_categories
+            clean_categories,
+            clean_large_items
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

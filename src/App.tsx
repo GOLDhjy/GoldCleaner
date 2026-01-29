@@ -26,6 +26,15 @@ type CleanupItem = {
   modifiedMs?: number | null;
 };
 
+type LargeItem = {
+  path: string;
+  name: string;
+  sizeBytes: number;
+  isDir: boolean;
+  suspicious: boolean;
+  categoryId?: string | null;
+};
+
 type CategoryItems = {
   items: CleanupItem[];
   hasMore: boolean;
@@ -95,6 +104,11 @@ function App() {
   const [includedSizes, setIncludedSizes] = useState<Record<string, number>>(
     {},
   );
+  const [largeItems, setLargeItems] = useState<LargeItem[]>([]);
+  const [largeScanning, setLargeScanning] = useState(false);
+  const [largeSelectedPaths, setLargeSelectedPaths] = useState<string[]>([]);
+  const [showSuspiciousOnly, setShowSuspiciousOnly] = useState(false);
+  const [scanProgress, setScanProgress] = useState(0);
 
   useEffect(() => {
     invoke<DiskInfo>("get_disk_info")
@@ -104,7 +118,40 @@ function App() {
       });
   }, []);
 
-  const selectedSize = useMemo(() => {
+  const scanActive = scanning || largeScanning;
+
+  useEffect(() => {
+    if (!scanActive) {
+      setScanProgress(0);
+      return;
+    }
+    setScanProgress(12);
+    const interval = setInterval(() => {
+      setScanProgress((prev) => {
+        const next = prev + 6 + Math.random() * 8;
+        return next >= 90 ? 90 : next;
+      });
+    }, 420);
+    return () => clearInterval(interval);
+  }, [scanActive]);
+
+  const standaloneSizeByPath = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of largeItems) {
+      if (!item.categoryId) {
+        map.set(item.path, item.sizeBytes);
+      }
+    }
+    return map;
+  }, [largeItems]);
+
+  const standaloneSelectedBytes = useMemo(() => {
+    return largeSelectedPaths.reduce((sum, path) => {
+      return sum + (standaloneSizeByPath.get(path) ?? 0);
+    }, 0);
+  }, [largeSelectedPaths, standaloneSizeByPath]);
+
+  const categorySelectedBytes = useMemo(() => {
     return categories.reduce((sum, category) => {
       if (selectedIds.includes(category.id)) {
         const excluded = excludedSizes[category.id] ?? 0;
@@ -115,10 +162,11 @@ function App() {
     }, 0);
   }, [selectedIds, categories, excludedSizes, includedSizes]);
 
-  const allSelected =
-    categories.length > 0 && selectedIds.length === categories.length;
+  const selectedSize = useMemo(() => {
+    return categorySelectedBytes + standaloneSelectedBytes;
+  }, [categorySelectedBytes, standaloneSelectedBytes]);
 
-  const selectedCategoryCount = useMemo(() => {
+  const quickSelectionCount = useMemo(() => {
     const set = new Set(selectedIds);
     for (const [id, paths] of Object.entries(includedPaths)) {
       if (paths.length > 0) {
@@ -128,11 +176,40 @@ function App() {
     return set.size;
   }, [selectedIds, includedPaths]);
 
-  const hasSelection = selectedCategoryCount > 0;
+  const selectedEntryCount = useMemo(() => {
+    const set = new Set(selectedIds);
+    for (const [id, paths] of Object.entries(includedPaths)) {
+      if (paths.length > 0) {
+        set.add(id);
+      }
+    }
+    return set.size + largeSelectedPaths.length;
+  }, [selectedIds, includedPaths, largeSelectedPaths]);
+
+  const hasSelection = selectedEntryCount > 0;
+
+  const allSelected =
+    categories.length > 0 && selectedIds.length === categories.length;
 
   const sortedCategories = useMemo(() => {
     return [...categories].sort((a, b) => b.sizeBytes - a.sizeBytes);
   }, [categories]);
+
+  const excludedLookup = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const [id, paths] of Object.entries(excludedPaths)) {
+      map[id] = new Set(paths);
+    }
+    return map;
+  }, [excludedPaths]);
+
+  const includedLookup = useMemo(() => {
+    const map: Record<string, Set<string>> = {};
+    for (const [id, paths] of Object.entries(includedPaths)) {
+      map[id] = new Set(paths);
+    }
+    return map;
+  }, [includedPaths]);
 
   const excludedCount = useMemo(() => {
     if (!activeCategory) return 0;
@@ -167,6 +244,28 @@ function App() {
       setScanStatus("扫描失败，请稍后重试");
     } finally {
       setScanning(false);
+    }
+  };
+
+  const handleLargeScan = async () => {
+    setLargeScanning(true);
+    setError("");
+    setScanStatus("正在扫描大文件…");
+    try {
+      const items = await invoke<LargeItem[]>("scan_large_items");
+      setLargeItems(items);
+      const standalonePaths = new Set(
+        items.filter((item) => !item.categoryId).map((item) => item.path),
+      );
+      setLargeSelectedPaths((prev) =>
+        prev.filter((path) => standalonePaths.has(path)),
+      );
+      setScanStatus(`扫描完成，发现 ${items.length} 项大文件/文件夹`);
+    } catch (err) {
+      setError(String(err));
+      setScanStatus("扫描失败，请稍后重试");
+    } finally {
+      setLargeScanning(false);
     }
   };
 
@@ -285,11 +384,50 @@ function App() {
     });
   };
 
+  const isLargeItemChecked = (item: LargeItem) => {
+    if (item.categoryId) {
+      const parentSelected = selectedIds.includes(item.categoryId);
+      const excludedSet = excludedLookup[item.categoryId];
+      const includedSet = includedLookup[item.categoryId];
+      const isExcluded = excludedSet?.has(item.path) ?? false;
+      const isIncluded = includedSet?.has(item.path) ?? false;
+      return parentSelected ? !isExcluded : isIncluded;
+    }
+    return largeSelectedPaths.includes(item.path);
+  };
+
+  const handleLargeToggle = (item: LargeItem, nextChecked: boolean) => {
+    if (item.categoryId) {
+      const parentSelected = selectedIds.includes(item.categoryId);
+      const excludedSet = excludedLookup[item.categoryId];
+      const includedSet = includedLookup[item.categoryId];
+      handleDetailToggle(
+        item.categoryId,
+        { path: item.path, sizeBytes: item.sizeBytes },
+        nextChecked,
+        parentSelected,
+        excludedSet?.has(item.path) ?? false,
+        includedSet?.has(item.path) ?? false,
+      );
+      return;
+    }
+    setLargeSelectedPaths((prev) => {
+      const set = new Set(prev);
+      if (nextChecked) {
+        set.add(item.path);
+      } else {
+        set.delete(item.path);
+      }
+      return Array.from(set);
+    });
+  };
+
   const handleClean = async () => {
     if (!hasSelection || cleaning) return;
     setCleaning(true);
     setScanStatus("正在清理中，请保持应用打开…");
     setError("");
+    const hadLargeSelection = largeSelectedPaths.length > 0;
     const categoryStats = categories.reduce<
       Record<string, { sizeBytes: number; fileCount: number }>
     >((acc, category) => {
@@ -300,7 +438,7 @@ function App() {
       return acc;
     }, {});
     try {
-      const result = await invoke<CleanupResult>("clean_categories", {
+      const categoryResult = await invoke<CleanupResult>("clean_categories", {
         request: {
           ids: selectedIds,
           excludedPaths,
@@ -308,12 +446,25 @@ function App() {
           categoryStats,
         },
       });
-      const summary = `清理完成，删除 ${result.deletedCount} 项，释放 ${formatBytes(
-        result.deletedBytes,
+      let totalDeletedBytes = categoryResult.deletedBytes;
+      let totalDeletedCount = categoryResult.deletedCount;
+      let failed = [...categoryResult.failed];
+
+      if (hadLargeSelection) {
+        const largeResult = await invoke<CleanupResult>("clean_large_items", {
+          paths: largeSelectedPaths,
+        });
+        totalDeletedBytes += largeResult.deletedBytes;
+        totalDeletedCount += largeResult.deletedCount;
+        failed = [...failed, ...largeResult.failed];
+      }
+
+      const summary = `清理完成，删除 ${totalDeletedCount} 项，释放 ${formatBytes(
+        totalDeletedBytes,
       )}`;
       setScanStatus(
-        result.failed.length
-          ? `${summary}，但有 ${result.failed.length} 项未能删除`
+        failed.length
+          ? `${summary}，但有 ${failed.length} 项未能删除`
           : summary,
       );
       const updated = await invoke<CleanupCategory[]>("scan_cleanup_items");
@@ -321,6 +472,12 @@ function App() {
       setSelectedIds([]);
       setIncludedPaths({});
       setIncludedSizes({});
+      setLargeSelectedPaths([]);
+
+      if (hadLargeSelection) {
+        const refreshedLarge = await invoke<LargeItem[]>("scan_large_items");
+        setLargeItems(refreshedLarge);
+      }
     } catch (err) {
       setError(String(err));
       setScanStatus("清理失败，请检查权限后重试");
@@ -329,10 +486,21 @@ function App() {
     }
   };
 
+  const toggleSelectAllLarge = () => {
+    if (filteredLargeItems.length === 0) return;
+    const nextChecked = !allLargeSelected;
+    for (const item of filteredLargeItems) {
+      const isChecked = isLargeItemChecked(item);
+      if (isChecked === nextChecked) continue;
+      handleLargeToggle(item, nextChecked);
+    }
+  };
+
   const handleCancel = () => {
     setSelectedIds([]);
     setIncludedPaths({});
     setIncludedSizes({});
+    setLargeSelectedPaths([]);
     setScanStatus("");
   };
 
@@ -349,6 +517,18 @@ function App() {
   const parentSelected = activeCategory
     ? selectedIds.includes(activeCategory.id)
     : false;
+
+  const filteredLargeItems = showSuspiciousOnly
+    ? largeItems.filter((item) => item.suspicious)
+    : largeItems;
+
+  const largeSelectedBytes = largeItems.reduce((sum, item) => {
+    return isLargeItemChecked(item) ? sum + item.sizeBytes : sum;
+  }, 0);
+
+  const allLargeSelected =
+    filteredLargeItems.length > 0 &&
+    filteredLargeItems.every((item) => isLargeItemChecked(item));
 
   const usedPercent = diskInfo?.usedPercent ?? 0;
 
@@ -377,14 +557,6 @@ function App() {
               <strong>{formatBytes(diskInfo?.totalBytes ?? 0)}</strong>
             </p>
           </div>
-          <button
-            className="ghost-button"
-            type="button"
-            onClick={handleScan}
-            disabled={scanning}
-          >
-            {scanning ? "扫描中…" : "扫描磁盘"}
-          </button>
         </div>
         <div className="progress">
           <div className="progress-track">
@@ -401,114 +573,265 @@ function App() {
       </section>
 
       <section className="cleanup-section">
-        {categories.length === 0 ? (
-          <div className="card empty-card">
-            <div className="empty-illustration">
-              <svg viewBox="0 0 64 64" aria-hidden>
-                <rect x="12" y="14" width="40" height="36" rx="10" />
-                <path d="M20 30h24M24 38h8" />
-              </svg>
+        {scanActive && (
+          <div className="card scan-card">
+            <div className="scan-header">
+              <div className="scan-title">
+                {scanning ? "正在扫描可清理文件…" : "正在扫描大文件…"}
+              </div>
+              <div className="scan-percent">
+                {Math.min(99, Math.round(scanProgress))}%
+              </div>
             </div>
-            <h3>准备开始</h3>
-            <p>点击上方的“扫描磁盘”按钮开始分析可清理的文件</p>
+            <div className="scan-progress">
+              <div className="scan-progress-track">
+                <div
+                  className="scan-progress-fill"
+                  style={{ width: `${Math.min(99, scanProgress)}%` }}
+                />
+              </div>
+            </div>
           </div>
-        ) : (
-          <div className="cleanup-panel">
-            <div className="panel-header">
-              <div>
-                <h3>清理项目</h3>
-                <p>
-                  已选择 {selectedCategoryCount} 项，可释放{" "}
-                  {formatBytes(selectedSize)}
-                </p>
+        )}
+
+        <div className="cleanup-grid">
+          <div className="card panel-card">
+            <div className="panel-top">
+              <div className="panel-title">
+                <span className="panel-icon quick">
+                  <svg viewBox="0 0 24 24" aria-hidden>
+                    <rect x="4" y="6" width="16" height="12" rx="3" />
+                    <path d="M7 11h10M8 15h4" />
+                  </svg>
+                </span>
+                <div>
+                  <h3>快速清理</h3>
+                  <p>扫描常见缓存与临时文件</p>
+                </div>
               </div>
               <button
-                className="text-button"
+                className="ghost-button"
                 type="button"
-                onClick={toggleSelectAll}
+                onClick={handleScan}
+                disabled={scanning}
               >
-                {allSelected ? "取消全选" : "全选"}
+                {scanning ? "扫描中" : "扫描"}
               </button>
             </div>
 
-            <div className="cleanup-list">
-              {sortedCategories.map((category, index) => {
-                const selected = selectedIds.includes(category.id);
-                const accent =
-                  CATEGORY_ACCENTS[category.id] ?? "var(--accent)";
-                return (
-                  <div
-                    key={category.id}
-                    className={`cleanup-item ${selected ? "selected" : ""}`}
-                    style={
-                      {
-                        "--accent": accent,
-                        "--delay": `${index * 80}ms`,
-                      } as CSSProperties
-                    }
+            {categories.length === 0 ? (
+              <div className="panel-empty">
+                <div className="panel-illustration">
+                  <svg viewBox="0 0 64 64" aria-hidden>
+                    <rect x="12" y="14" width="40" height="36" rx="10" />
+                    <path d="M20 30h24M24 38h8" />
+                  </svg>
+                </div>
+                <p>点击扫描按钮开始分析可清理的文件</p>
+              </div>
+            ) : (
+              <>
+                <div className="panel-subheader">
+                  <span>
+                    已选择 {quickSelectionCount} 项，可释放{" "}
+                    {formatBytes(categorySelectedBytes)}
+                  </span>
+                  <button
+                    className="text-button"
+                    type="button"
+                    onClick={toggleSelectAll}
                   >
-                    <label className="checkbox">
-                      <input
-                        type="checkbox"
-                        checked={selected}
-                        onChange={() => toggleCategory(category.id)}
-                      />
-                      <span className="checkbox-mark" aria-hidden />
-                    </label>
-                    <div className="item-icon">
-                      <CategoryIcon id={category.id} />
-                    </div>
-                    <div className="item-body">
-                      <div className="item-title">{category.title}</div>
-                      <div className="item-desc">{category.description}</div>
-                      <div className="item-meta">
-                        {category.fileCount} 项可清理
-                      </div>
-                    </div>
-                    <div className="item-actions">
-                      <button
-                        className="link-button"
-                        type="button"
-                        onClick={() => openDetails(category)}
+                    {allSelected ? "取消全选" : "全选"}
+                  </button>
+                </div>
+                <div className="cleanup-list">
+                  {sortedCategories.map((category, index) => {
+                    const selected = selectedIds.includes(category.id);
+                    const accent =
+                      CATEGORY_ACCENTS[category.id] ?? "var(--accent)";
+                    return (
+                      <div
+                        key={category.id}
+                        className={`cleanup-item ${selected ? "selected" : ""}`}
+                        style={
+                          {
+                            "--accent": accent,
+                            "--delay": `${index * 80}ms`,
+                          } as CSSProperties
+                        }
                       >
-                        查看详情
-                      </button>
-                      <div className="item-size">
-                        {formatBytes(category.sizeBytes)}
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleCategory(category.id)}
+                          />
+                          <span className="checkbox-mark" aria-hidden />
+                        </label>
+                        <div className="item-icon">
+                          <CategoryIcon id={category.id} />
+                        </div>
+                        <div className="item-body">
+                          <div className="item-title">{category.title}</div>
+                          <div className="item-desc">{category.description}</div>
+                          <div className="item-meta">
+                            {category.fileCount} 项可清理
+                          </div>
+                        </div>
+                        <div className="item-actions">
+                          <button
+                            className="link-button"
+                            type="button"
+                            onClick={() => openDetails(category)}
+                          >
+                            查看详情
+                          </button>
+                          <div className="item-size">
+                            {formatBytes(category.sizeBytes)}
+                          </div>
+                        </div>
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+
+          <div className="card panel-card">
+            <div className="panel-top">
+              <div className="panel-title">
+                <span className="panel-icon large">
+                  <svg viewBox="0 0 24 24" aria-hidden>
+                    <circle cx="11" cy="11" r="6.5" />
+                    <path d="M16.5 16.5L20 20" />
+                  </svg>
+                </span>
+                <div>
+                  <h3>大文件扫描</h3>
+                  <p>快速定位占用空间的文件/文件夹</p>
+                </div>
+              </div>
+              <button
+                className="ghost-button"
+                type="button"
+                onClick={handleLargeScan}
+                disabled={largeScanning}
+              >
+                {largeScanning ? "扫描中" : "扫描"}
+              </button>
             </div>
 
-            <div className="action-bar">
-              <div>
-                <div className="action-summary">
-                  已选择 {selectedCategoryCount} 项，可释放{" "}
-                  {formatBytes(selectedSize)}
+            {largeItems.length === 0 ? (
+              <div className="panel-empty">
+                <div className="panel-illustration">
+                  <svg viewBox="0 0 64 64" aria-hidden>
+                    <circle cx="30" cy="30" r="16" />
+                    <path d="M44 44l12 12" />
+                  </svg>
                 </div>
-                {scanStatus && <div className="action-status">{scanStatus}</div>}
-                {error && <div className="action-error">{error}</div>}
+                <p>
+                  点击扫描按钮查看占用大量空间的文件
+                  <br />
+                  自动识别 log、cache、temp 等可疑文件夹
+                </p>
               </div>
-              <div className="action-buttons">
-                <button
-                  className="secondary-button"
-                  type="button"
-                  onClick={handleCancel}
-                  disabled={cleaning}
-                >
-                  取消
-                </button>
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={handleClean}
-                  disabled={!hasSelection || cleaning}
-                >
-                  {cleaning ? "清理中…" : "开始清理"}
-                </button>
+            ) : (
+              <>
+                <div className="panel-subheader large-subheader">
+                  <span>可释放 {formatBytes(largeSelectedBytes)}</span>
+                  <div className="panel-actions">
+                    <button
+                      className={`chip ${showSuspiciousOnly ? "active" : ""}`}
+                      type="button"
+                      onClick={() =>
+                        setShowSuspiciousOnly((prev) => !prev)
+                      }
+                    >
+                      可疑项
+                    </button>
+                    <button
+                      className="text-button"
+                      type="button"
+                      onClick={toggleSelectAllLarge}
+                    >
+                      {allLargeSelected ? "取消全选" : "全选"}
+                    </button>
+                  </div>
+                </div>
+                <div className="large-list">
+                  {filteredLargeItems.map((item) => {
+                    const checked = isLargeItemChecked(item);
+                    return (
+                      <div
+                        key={item.path}
+                        className={`large-item ${
+                          checked ? "selected" : ""
+                        } ${item.suspicious ? "suspicious" : ""}`}
+                      >
+                        <label className="checkbox">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => handleLargeToggle(item, !checked)}
+                          />
+                          <span className="checkbox-mark" aria-hidden />
+                        </label>
+                        <div className="large-icon">
+                          <LargeItemIcon isDir={item.isDir} />
+                        </div>
+                        <div className="large-body">
+                          <div className="large-title">
+                            <span>{item.name}</span>
+                            {item.suspicious && (
+                              <span className="tag">可疑</span>
+                            )}
+                          </div>
+                          <div className="large-path">{item.path}</div>
+                        </div>
+                        <div className="large-size">
+                          {formatBytes(item.sizeBytes)}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+
+        {(categories.length > 0 ||
+          largeItems.length > 0 ||
+          hasSelection ||
+          scanStatus ||
+          error) && (
+          <div className="action-bar">
+            <div>
+              <div className="action-summary">
+                已选择 {selectedEntryCount} 项，可释放{" "}
+                {formatBytes(selectedSize)}
               </div>
+              {scanStatus && <div className="action-status">{scanStatus}</div>}
+              {error && <div className="action-error">{error}</div>}
+            </div>
+            <div className="action-buttons">
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={handleCancel}
+                disabled={cleaning}
+              >
+                取消
+              </button>
+              <button
+                className="primary-button"
+                type="button"
+                onClick={handleClean}
+                disabled={!hasSelection || cleaning}
+              >
+                {cleaning ? "清理中…" : "开始清理"}
+              </button>
             </div>
           </div>
         )}
@@ -647,6 +970,22 @@ function CategoryIcon({ id }: { id: string }) {
         </svg>
       );
   }
+}
+
+function LargeItemIcon({ isDir }: { isDir: boolean }) {
+  if (isDir) {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+      </svg>
+    );
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path d="M6 4h7l5 5v11H6z" />
+      <path d="M9 13h6M9 17h4" />
+    </svg>
+  );
 }
 
 export default App;

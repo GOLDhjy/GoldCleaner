@@ -67,7 +67,7 @@ body::after {
 }
 
 .app {
-  max-width: 980px;
+  max-width: 1180px;
   margin: 0 auto;
   padding: 28px 24px 48px;
   display: flex;
@@ -263,7 +263,7 @@ body::after {
 .cleanup-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 20px;
   flex: 1;
   min-height: 0;
 }
@@ -490,6 +490,7 @@ body::after {
 .large-item {
   display: grid;
   grid-template-columns: auto auto 1fr auto;
+  grid-template-areas: "check icon body size";
   gap: 10px;
   align-items: center;
   padding: 12px;
@@ -498,6 +499,22 @@ body::after {
   background: #fbfcff;
   box-shadow: 0 6px 16px rgba(36, 52, 96, 0.06);
   transition: border 0.2s ease, box-shadow 0.2s ease;
+}
+
+.large-item .checkbox {
+  grid-area: check;
+}
+
+.large-item .large-icon {
+  grid-area: icon;
+}
+
+.large-item .large-body {
+  grid-area: body;
+}
+
+.large-item .large-size {
+  grid-area: size;
 }
 
 .large-item.selected {
@@ -569,6 +586,7 @@ body::after {
   padding: 16px;
   display: grid;
   grid-template-columns: auto auto 1fr auto;
+  grid-template-areas: "check icon body actions";
   gap: 14px;
   align-items: center;
   box-shadow: var(--shadow-soft);
@@ -577,6 +595,24 @@ body::after {
   transform: translateY(12px);
   animation: fadeUp 0.6s ease forwards;
   animation-delay: var(--delay);
+}
+
+.cleanup-item .checkbox {
+  grid-area: check;
+  align-self: start;
+}
+
+.cleanup-item .item-icon {
+  grid-area: icon;
+  align-self: start;
+}
+
+.cleanup-item .item-body {
+  grid-area: body;
+}
+
+.cleanup-item .item-actions {
+  grid-area: actions;
 }
 
 .cleanup-item.selected {
@@ -874,6 +910,11 @@ body::after {
 
   .cleanup-item {
     grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "check body"
+      "icon body"
+      "actions actions";
+    align-items: start;
   }
 
   .item-actions {
@@ -881,15 +922,26 @@ body::after {
     justify-content: space-between;
     align-items: center;
     grid-column: 1 / -1;
+    width: 100%;
   }
 
   .large-item {
     grid-template-columns: auto 1fr;
+    grid-template-areas:
+      "check body"
+      "icon body"
+      "size size";
+    align-items: start;
   }
 
   .large-size {
     grid-column: 1 / -1;
     justify-self: end;
+    margin-top: 4px;
+  }
+
+  .large-icon {
+    margin-top: 4px;
   }
 
   .action-bar {

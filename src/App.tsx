@@ -26,6 +26,12 @@ type CleanupItem = {
   modifiedMs?: number | null;
 };
 
+type HibernationInfo = {
+  enabled: boolean;
+  sizeBytes: number;
+  path: string;
+};
+
 type LargeItem = {
   path: string;
   name: string;
@@ -109,10 +115,21 @@ function App() {
   const [largeSelectedPaths, setLargeSelectedPaths] = useState<string[]>([]);
   const [showSuspiciousOnly, setShowSuspiciousOnly] = useState(false);
   const [scanProgress, setScanProgress] = useState(0);
+  const [hibernationInfo, setHibernationInfo] =
+    useState<HibernationInfo | null>(null);
+  const [hibernationLoading, setHibernationLoading] = useState(false);
 
   useEffect(() => {
     invoke<DiskInfo>("get_disk_info")
       .then(setDiskInfo)
+      .catch((err) => {
+        setError(String(err));
+      });
+  }, []);
+
+  useEffect(() => {
+    invoke<HibernationInfo>("get_hibernation_info")
+      .then(setHibernationInfo)
       .catch((err) => {
         setError(String(err));
       });
@@ -266,6 +283,26 @@ function App() {
       setScanStatus("扫描失败，请稍后重试");
     } finally {
       setLargeScanning(false);
+    }
+  };
+
+  const handleHibernationToggle = async () => {
+    if (hibernationLoading || !hibernationInfo) return;
+    const nextEnabled = !hibernationInfo.enabled;
+    setHibernationLoading(true);
+    setError("");
+    try {
+      const updated = await invoke<HibernationInfo>("set_hibernation_enabled", {
+        enabled: nextEnabled,
+      });
+      setHibernationInfo(updated);
+      setScanStatus(nextEnabled ? "已开启休眠功能" : "已关闭休眠功能");
+      const disk = await invoke<DiskInfo>("get_disk_info");
+      setDiskInfo(disk);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setHibernationLoading(false);
     }
   };
 
@@ -549,7 +586,7 @@ function App() {
 
       <section className="card disk-card">
         <div className="disk-header">
-          <div>
+          <div className="disk-info">
             <h2>本地磁盘 (C:)</h2>
             <p>
               可用空间{" "}
@@ -557,6 +594,24 @@ function App() {
               <strong>{formatBytes(diskInfo?.totalBytes ?? 0)}</strong>
             </p>
           </div>
+          {hibernationInfo?.enabled && (
+            <div className="hiber-inline">
+              <div className="hiber-text">
+                <div className="hiber-title">休眠文件</div>
+                <div className="hiber-desc">
+                  hiberfil.sys 占用 {formatBytes(hibernationInfo.sizeBytes)}
+                </div>
+              </div>
+              <button
+                className="ghost-button hiber-action"
+                type="button"
+                onClick={handleHibernationToggle}
+                disabled={hibernationLoading}
+              >
+                {hibernationLoading ? "处理中…" : "关闭休眠"}
+              </button>
+            </div>
+          )}
         </div>
         <div className="progress">
           <div className="progress-track">

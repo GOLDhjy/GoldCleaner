@@ -3,7 +3,9 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
+    process::Command,
     time::{Duration, SystemTime},
 };
 #[cfg(target_os = "windows")]
@@ -45,6 +47,14 @@ struct CleanupItem {
     path: String,
     size_bytes: u64,
     modified_ms: Option<i64>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct HibernationInfo {
+    enabled: bool,
+    size_bytes: u64,
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -130,6 +140,22 @@ async fn get_disk_info() -> Result<DiskInfo, String> {
 }
 
 #[tauri::command]
+async fn get_hibernation_info() -> Result<HibernationInfo, String> {
+    ensure_windows()?;
+    tauri::async_runtime::spawn_blocking(move || get_hibernation_info_sync())
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
+async fn set_hibernation_enabled(enabled: bool) -> Result<HibernationInfo, String> {
+    ensure_windows()?;
+    tauri::async_runtime::spawn_blocking(move || set_hibernation_enabled_sync(enabled))
+        .await
+        .map_err(|err| err.to_string())?
+}
+
+#[tauri::command]
 async fn scan_cleanup_items() -> Result<Vec<CleanupCategory>, String> {
     ensure_windows()?;
     tauri::async_runtime::spawn_blocking(move || scan_cleanup_items_sync())
@@ -210,6 +236,33 @@ fn get_disk_info_sync() -> Result<DiskInfo, String> {
         used_bytes: used,
         used_percent,
     })
+}
+
+fn get_hibernation_info_sync() -> Result<HibernationInfo, String> {
+    let system_drive = env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+    let path = PathBuf::from(format!("{}\\hiberfil.sys", system_drive));
+    let (enabled, size_bytes) = match fs::metadata(&path) {
+        Ok(metadata) => (true, metadata.len()),
+        Err(err) if err.kind() == ErrorKind::NotFound => (false, 0),
+        Err(err) => return Err(err.to_string()),
+    };
+    Ok(HibernationInfo {
+        enabled,
+        size_bytes,
+        path: path.to_string_lossy().to_string(),
+    })
+}
+
+fn set_hibernation_enabled_sync(enabled: bool) -> Result<HibernationInfo, String> {
+    let status = Command::new("powercfg")
+        .arg("/hibernate")
+        .arg(if enabled { "on" } else { "off" })
+        .status()
+        .map_err(|err| err.to_string())?;
+    if !status.success() {
+        return Err("Failed to update hibernation state. Try running as administrator.".to_string());
+    }
+    get_hibernation_info_sync()
 }
 
 fn scan_cleanup_items_sync() -> Result<Vec<CleanupCategory>, String> {
@@ -1123,6 +1176,8 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             get_disk_info,
+            get_hibernation_info,
+            set_hibernation_enabled,
             scan_cleanup_items,
             scan_large_items,
             list_category_items,

@@ -11,6 +11,7 @@ permissions:
 
 jobs:
   release:
+    environment: Updater
     strategy:
       fail-fast: false
       matrix:
@@ -52,7 +53,6 @@ jobs:
             '- **Windows**: `*-setup.exe` or `*_en-US.msi`',
             '',
             '## Changelog',
-            $log
           )
           $bodyLines += $logLines
           $body = $bodyLines -join "`n"
@@ -61,10 +61,30 @@ jobs:
           $body | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
+      - name: Prepare Tauri signing key
+        if: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          $key = $env:TAURI_SIGNING_PRIVATE_KEY.Trim()
+          if ($key -notmatch '^untrusted comment:') {
+            try {
+              $decoded = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($key))
+              if ($decoded -match '^untrusted comment:') {
+                $key = $decoded.Trim()
+              }
+            } catch {
+              # If decoding fails, keep the original value.
+            }
+          }
+          "TAURI_SIGNING_PRIVATE_KEY<<EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          $key | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "EOF" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build and release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         uses: tauri-apps/tauri-action@v0
         with:

@@ -35,7 +35,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDQzIwNTBCMDhEOTYwN0YKUldSL1lOa0lDd1hDVENvMWNUdHpKWG1KUk85U05qVEZqeFByWlhFMTZ5dU05RmRySmtpMEFVNFUK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDk2Qzc0NkY2Q0Y1ODczMUUKUldRZWMxalA5a2JIbHFYZldHOE5ETzZLbk9ZTk1UYzJobUlnQWhWRWFYQm1HbHlvZkMvYjYxb2wK",
       "endpoints": [
         "https://github.com/GOLDhjy/GoldCleaner/releases/latest/download/latest.json"
       ]

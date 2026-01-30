@@ -62,14 +62,63 @@ jobs:
           "EOF" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
       - name: Build and release
-        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        uses: tauri-apps/tauri-action@v0
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "GoldCleaner ${{ github.ref_name }}"
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: false
           prerelease: false
+
+      - name: Generate and upload latest.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+
+          # Get the release assets
+          $assets = gh release view $tag --json assets --jq '.assets[] | select(.name | endswith(".exe")) | {name, url}'
+          $exeAsset = gh release view $tag --json assets --jq '.assets[] | select(.name | endswith("_x64-setup.exe")) | .name'
+
+          if (-not $exeAsset) {
+            Write-Error "No setup.exe found in release assets"
+            exit 1
+          }
+
+          # Download the signature file
+          $sigAsset = $exeAsset + ".sig"
+          gh release download $tag --pattern $sigAsset --output sig.tmp
+
+          # Read signature and remove newlines
+          $signature = Get-Content sig.tmp -Raw
+          $signature = $signature -replace "`n", "" -replace "`r", ""
+
+          # Construct download URL
+          $downloadUrl = "https://github.com/GOLDhjy/GoldCleaner/releases/download/$tag/$exeAsset"
+
+          # Create latest.json
+          $latestJson = @{
+            version = $version
+            notes = "查看完整更新说明：https://github.com/GOLDhjy/GoldCleaner/releases/tag/$tag"
+            pub_date = $date
+            platforms = @{
+              "windows-x86_64" = @{
+                signature = $signature
+                url = $downloadUrl
+              }
+            }
+          } | ConvertTo-Json -Depth 10
+
+          $latestJson | Out-File -FilePath latest.json -Encoding utf8
+
+          # Upload latest.json to the release
+          gh release upload $tag latest.json --clobber
+
+          # Clean up
+          Remove-Item sig.tmp, latest.json -Force

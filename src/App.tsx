@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import "./App.css";
 
 type DiskInfo = {
@@ -40,6 +42,8 @@ type LargeItem = {
   suspicious: boolean;
   categoryId?: string | null;
 };
+
+type UpdateStatus = 'idle' | 'checking' | 'downloading' | 'ready' | 'installing';
 
 type CategoryItems = {
   items: CleanupItem[];
@@ -119,6 +123,11 @@ function App() {
     useState<HibernationInfo | null>(null);
   const [hibernationLoading, setHibernationLoading] = useState(false);
 
+  // Update state
+  const [updateInfo, setUpdateInfo] = useState<{ version: string; body: string } | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
+  const [downloadProgress, setDownloadProgress] = useState(0);
+
   useEffect(() => {
     invoke<DiskInfo>("get_disk_info")
       .then(setDiskInfo)
@@ -133,6 +142,29 @@ function App() {
       .catch((err) => {
         setError(String(err));
       });
+  }, []);
+
+  // Check for updates on startup
+  useEffect(() => {
+    const checkForUpdate = async () => {
+      try {
+        setUpdateStatus('checking');
+        const update = await check();
+
+        if (update?.available) {
+          setUpdateInfo({
+            version: update.version,
+            body: update.body || '新版本已发布，建议立即更新。'
+          });
+          setUpdateStatus('ready');
+        }
+      } catch (error) {
+        console.error('检查更新失败:', error);
+        // Silently fail - don't interrupt normal usage
+      }
+    };
+
+    checkForUpdate();
   }, []);
 
   const scanActive = scanning || largeScanning;
@@ -539,6 +571,51 @@ function App() {
     setIncludedSizes({});
     setLargeSelectedPaths([]);
     setScanStatus("");
+  };
+
+  // Update handler functions
+  const handleDownloadAndInstall = async () => {
+    if (!updateInfo) return;
+
+    try {
+      setUpdateStatus('downloading');
+      const update = await check();
+      if (!update) return;
+
+      let downloaded = 0;
+      let contentLength = 0;
+
+      await update.downloadAndInstall((event) => {
+        switch (event.event) {
+          case 'Started':
+            contentLength = event.data.contentLength;
+            break;
+          case 'Progress':
+            downloaded += event.data.chunkLength;
+            setDownloadProgress(Math.round((downloaded / contentLength) * 100));
+            break;
+          case 'Finished':
+            setUpdateStatus('installing');
+            break;
+        }
+      });
+
+      // Installation complete, show restart prompt
+      setUpdateStatus('ready');
+    } catch (error) {
+      console.error('更新失败:', error);
+      setUpdateStatus('idle');
+      setError('更新失败，请稍后重试');
+    }
+  };
+
+  const handleRelaunch = async () => {
+    await relaunch();
+  };
+
+  const handleSkipUpdate = () => {
+    setUpdateInfo(null);
+    setUpdateStatus('idle');
   };
 
   const excludedSet = useMemo(() => {
@@ -968,6 +1045,92 @@ function App() {
                 )}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Update dialogs */}
+      {updateInfo && updateStatus === 'ready' && downloadProgress === 0 && (
+        <div className="update-overlay">
+          <div className="update-card">
+            <div className="update-header">
+              <div className="update-icon">📦</div>
+              <div>
+                <div className="update-title">发现新版本</div>
+                <div className="update-version">v{updateInfo.version}</div>
+              </div>
+            </div>
+            <div className="update-body">{updateInfo.body}</div>
+            <div className="update-actions">
+              <button className="secondary-button" onClick={handleSkipUpdate}>
+                跳过
+              </button>
+              <button className="primary-button" onClick={handleDownloadAndInstall}>
+                立即更新
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {updateStatus === 'downloading' && (
+        <div className="update-overlay">
+          <div className="update-card">
+            <div className="update-header">
+              <div className="update-icon">⬇️</div>
+              <div>
+                <div className="update-title">正在下载更新</div>
+                <div className="update-version">v{updateInfo?.version}</div>
+              </div>
+            </div>
+            <div className="update-progress">
+              <div className="update-progress-text">
+                <span>下载进度</span>
+                <span>{downloadProgress}%</span>
+              </div>
+              <div className="update-progress-bar">
+                <div
+                  className="update-progress-fill"
+                  style={{ width: `${downloadProgress}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {updateStatus === 'installing' && (
+        <div className="update-overlay">
+          <div className="update-card">
+            <div className="update-header">
+              <div className="update-icon">⚙️</div>
+              <div>
+                <div className="update-title">正在安装更新</div>
+              </div>
+            </div>
+            <div className="update-body">安装完成后应用将自动重启</div>
+          </div>
+        </div>
+      )}
+
+      {downloadProgress === 100 && updateStatus === 'ready' && (
+        <div className="update-overlay">
+          <div className="update-card">
+            <div className="update-header">
+              <div className="update-icon">✅</div>
+              <div>
+                <div className="update-title">更新已就绪</div>
+              </div>
+            </div>
+            <div className="update-body">更新已下载完成，需要重启应用才能完成安装。</div>
+            <div className="update-actions">
+              <button className="secondary-button" onClick={handleSkipUpdate}>
+                稍后重启
+              </button>
+              <button className="primary-button" onClick={handleRelaunch}>
+                立即重启
+              </button>
+            </div>
           </div>
         </div>
       )}

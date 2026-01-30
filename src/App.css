@@ -1009,3 +1009,111 @@ body::after {
     justify-content: flex-end;
   }
 }
+
+/* Update dialog styles */
+.update-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(31, 39, 61, 0.5);
+  display: grid;
+  place-items: center;
+  z-index: 1000;
+  animation: fadeIn 0.2s ease;
+}
+
+.update-card {
+  background: var(--card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  max-width: 480px;
+  width: 90%;
+  padding: 32px;
+  animation: slideUp 0.3s ease;
+}
+
+.update-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.update-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #3b6cff 0%, #6c8bff 100%);
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+}
+
+.update-title {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.update-version {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.update-body {
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 24px;
+}
+
+.update-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+}
+
+.update-progress {
+  margin-bottom: 24px;
+}
+
+.update-progress-text {
+  font-size: 14px;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.update-progress-bar {
+  height: 8px;
+  background: var(--bg-soft);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.update-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b6cff 0%, #6c8bff 100%);
+  border-radius: 8px;
+  transition: width 0.3s ease;
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

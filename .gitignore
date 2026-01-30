@@ -22,3 +22,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+~/.tauri/goldcleaner.key
+~/.tauri/goldcleaner.key.pub
+.claude/settings.local.json
+.claude/settings.json

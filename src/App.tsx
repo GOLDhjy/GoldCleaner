@@ -663,14 +663,7 @@ function App() {
 
       <section className="card disk-card">
         <div className="disk-header">
-          <div className="disk-info">
-            <h2>本地磁盘 (C:)</h2>
-            <p>
-              可用空间{" "}
-              <strong>{formatBytes(diskInfo?.freeBytes ?? 0)}</strong> / 总容量{" "}
-              <strong>{formatBytes(diskInfo?.totalBytes ?? 0)}</strong>
-            </p>
-          </div>
+          <h2>本地磁盘 (C:)</h2>
           {hibernationInfo?.enabled && (
             <div className="hiber-inline">
               <div className="hiber-text">
@@ -698,8 +691,8 @@ function App() {
             />
           </div>
           <div className="progress-meta">
-            已使用 {formatBytes(diskInfo?.usedBytes ?? 0)} (
-            {usedPercent.toFixed(1)}%)
+            可用空间 {formatBytes(diskInfo?.freeBytes ?? 0)} / 总容量{" "}
+            {formatBytes(diskInfo?.totalBytes ?? 0)}
           </div>
         </div>
       </section>

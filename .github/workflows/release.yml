@@ -52,7 +52,7 @@ jobs:
             '## Download',
             '- **Windows**: `*-setup.exe` or `*_en-US.msi`',
             '',
-            '## Changelog',
+            '## Changelog'
           )
           $bodyLines += $logLines
           $body = $bodyLines -join "`n"

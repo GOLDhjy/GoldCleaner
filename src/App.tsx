@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -128,6 +129,9 @@ function App() {
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus>('idle');
   const [downloadProgress, setDownloadProgress] = useState(0);
 
+  // Menu state
+  const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
+
   useEffect(() => {
     invoke<DiskInfo>("get_disk_info")
       .then(setDiskInfo)
@@ -144,13 +148,11 @@ function App() {
       });
   }, []);
 
-  // Check for updates on startup
+  // Check for updates on startup (silent check)
   useEffect(() => {
     const checkForUpdate = async () => {
       try {
-        setUpdateStatus('checking');
         const update = await check();
-
         if (update?.available) {
           setUpdateInfo({
             version: update.version,
@@ -160,11 +162,25 @@ function App() {
         }
       } catch (error) {
         console.error('检查更新失败:', error);
-        // Silently fail - don't interrupt normal usage
       }
     };
 
     checkForUpdate();
+  }, []);
+
+  // Listen for menu events from system menu
+  useEffect(() => {
+    const unlisten = listen<string>('menu-event', (event) => {
+      if (event.payload === 'check-update') {
+        handleCheckUpdate();
+      } else if (event.payload === 'about') {
+        setAboutDialogOpen(true);
+      }
+    });
+
+    return () => {
+      unlisten.then(fn => fn());
+    };
   }, []);
 
   const scanActive = scanning || largeScanning;
@@ -616,6 +632,29 @@ function App() {
   const handleSkipUpdate = () => {
     setUpdateInfo(null);
     setUpdateStatus('idle');
+  };
+
+  // Manual check for updates (called from system menu)
+  const handleCheckUpdate = async () => {
+    try {
+      setUpdateStatus('checking');
+      const update = await check();
+      if (update?.available) {
+        setUpdateInfo({
+          version: update.version,
+          body: update.body || '新版本已发布，建议立即更新。'
+        });
+        setUpdateStatus('ready');
+      } else {
+        setUpdateInfo(null);
+        setScanStatus('已是最新版本');
+        setUpdateStatus('idle');
+      }
+    } catch (error) {
+      console.error('检查更新失败:', error);
+      setError('检查更新失败，请稍后重试');
+      setUpdateStatus('idle');
+    }
   };
 
   const excludedSet = useMemo(() => {
@@ -1122,6 +1161,36 @@ function App() {
               </button>
               <button className="primary-button" onClick={handleRelaunch}>
                 立即重启
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* About Dialog */}
+      {aboutDialogOpen && (
+        <div className="update-overlay">
+          <div className="update-card about-card">
+            <div className="update-header">
+              <div className="about-icon">
+                <svg viewBox="0 0 48 48" aria-hidden>
+                  <rect x="6" y="10" width="36" height="28" rx="8" />
+                  <path d="M14 20h20M16 28h4" />
+                </svg>
+              </div>
+              <div>
+                <div className="update-title">GoldCleaner</div>
+                <div className="update-version">v0.5.0</div>
+              </div>
+            </div>
+            <div className="update-body">
+              C盘清理工具 - 扫描并清理不必要的文件，释放磁盘空间。
+              <br /><br />
+              <span className="about-copyright">© 2026 GoldCleaner</span>
+            </div>
+            <div className="update-actions">
+              <button className="primary-button" onClick={() => setAboutDialogOpen(false)}>
+                关闭
               </button>
             </div>
           </div>

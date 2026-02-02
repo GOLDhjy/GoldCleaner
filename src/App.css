@@ -1105,3 +1105,32 @@ body {
     transform: translateY(0);
   }
 }
+
+/* About Dialog */
+.about-card {
+  text-align: left;
+}
+
+.about-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--primary);
+  display: grid;
+  place-items: center;
+}
+
+.about-icon svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: #fff;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.about-copyright {
+  font-size: 12px;
+  color: #9ca3af;
+}

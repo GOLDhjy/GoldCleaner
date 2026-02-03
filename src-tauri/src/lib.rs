@@ -19,8 +19,7 @@ use windows_sys::Win32::UI::Shell::{
     SHERB_NOPROGRESSUI, SHERB_NOSOUND,
 };
 use walkdir::WalkDir;
-use tauri::{Manager, Emitter};
-use tauri::menu::{Menu, MenuItem, Submenu};
+use tauri::Manager;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -1165,7 +1164,6 @@ fn system_drive_mount() -> PathBuf {
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            // Set window icon
             if let Some(window) = app.get_webview_window("main") {
                 if let Ok(icon) =
                     tauri::image::Image::from_bytes(include_bytes!("../icons/icon.png"))
@@ -1173,21 +1171,7 @@ pub fn run() {
                     let _ = window.set_icon(icon);
                 }
             }
-
-            // Create menu
-            let check_update = MenuItem::with_id(app, "check-update", "检查更新", true, None::<&str>)?;
-            let about = MenuItem::with_id(app, "about", "关于", true, None::<&str>)?;
-            let help_menu = Submenu::with_items(app, "帮助", true, &[&check_update, &about])?;
-            let menu = Menu::with_items(app, &[&help_menu])?;
-            app.set_menu(menu)?;
-
             Ok(())
-        })
-        .on_menu_event(|app, event| {
-            let id = event.id().as_ref();
-            if let Some(window) = app.get_webview_window("main") {
-                let _ = window.emit("menu-event", id);
-            }
         })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

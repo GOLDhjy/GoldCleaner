@@ -1,0 +1,268 @@
+{
+  "version": "2.6",
+  "children": [
+    {
+      "type": "frame",
+      "id": "bi8Au",
+      "x": 0,
+      "y": -2,
+      "name": "Frame",
+      "clip": true,
+      "width": 800,
+      "height": 600,
+      "fill": "#FFFFFF",
+      "layout": "vertical",
+      "gap": 20,
+      "children": [
+        {
+          "type": "frame",
+          "id": "zIhNr",
+          "name": "菜单栏-无更新",
+          "width": "fill_container",
+          "height": 30,
+          "fill": "#F9FAFB",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#E5E7EB"
+          },
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "yFN9u",
+              "name": "appIcon",
+              "width": 18,
+              "height": 18,
+              "fill": "#3B82F6",
+              "cornerRadius": 3
+            },
+            {
+              "type": "text",
+              "id": "IZOKR",
+              "name": "appName",
+              "fill": "#374151",
+              "content": "GoldCleaner",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "oU5ua",
+              "name": "spacer1",
+              "width": 16,
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "LGrqS",
+              "name": "帮助菜单-无更新",
+              "cornerRadius": 4,
+              "padding": [
+                4,
+                10
+              ],
+              "children": [
+                {
+                  "type": "text",
+                  "id": "mKP0q",
+                  "name": "menuHelpText",
+                  "fill": "#374151",
+                  "content": "帮助",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "oGoDI",
+          "name": "帮助下拉菜单",
+          "width": 160,
+          "fill": "#FFFFFF",
+          "cornerRadius": 8,
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#E5E7EB"
+          },
+          "effect": {
+            "type": "shadow",
+            "shadowType": "outer",
+            "color": "#00000015",
+            "offset": {
+              "x": 0,
+              "y": 4
+            },
+            "blur": 12
+          },
+          "layout": "vertical",
+          "padding": 4,
+          "children": [
+            {
+              "type": "frame",
+              "id": "uRaSG",
+              "name": "menuItem1",
+              "width": "fill_container",
+              "cornerRadius": 4,
+              "gap": 8,
+              "padding": [
+                8,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "JE3XY",
+                  "name": "icon1",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "refresh-cw",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6B7280"
+                },
+                {
+                  "type": "text",
+                  "id": "GoPmh",
+                  "name": "text1",
+                  "fill": "#374151",
+                  "content": "检查更新",
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                }
+              ]
+            },
+            {
+              "type": "frame",
+              "id": "A2akI",
+              "name": "divider",
+              "width": "fill_container",
+              "height": 1,
+              "fill": "#E5E7EB"
+            },
+            {
+              "type": "frame",
+              "id": "uM00C",
+              "name": "menuItem2",
+              "width": "fill_container",
+              "cornerRadius": 4,
+              "gap": 8,
+              "padding": [
+                8,
+                12
+              ],
+              "alignItems": "center",
+              "children": [
+                {
+                  "type": "icon_font",
+                  "id": "SC6Dk",
+                  "name": "icon2",
+                  "width": 14,
+                  "height": 14,
+                  "iconFontName": "info",
+                  "iconFontFamily": "lucide",
+                  "fill": "#6B7280"
+                },
+                {
+                  "type": "text",
+                  "id": "nbGvk",
+                  "name": "text2",
+                  "fill": "#374151",
+                  "content": "关于",
+                  "fontFamily": "Inter",
+                  "fontSize": 13
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "frame",
+          "id": "oCVG2",
+          "name": "菜单栏-有更新",
+          "width": "fill_container",
+          "height": 30,
+          "fill": "#F9FAFB",
+          "stroke": {
+            "align": "inside",
+            "thickness": 1,
+            "fill": "#E5E7EB"
+          },
+          "padding": [
+            0,
+            8
+          ],
+          "alignItems": "center",
+          "children": [
+            {
+              "type": "frame",
+              "id": "TydOv",
+              "name": "appIcon2",
+              "width": 18,
+              "height": 18,
+              "fill": "#3B82F6",
+              "cornerRadius": 3
+            },
+            {
+              "type": "text",
+              "id": "jCrQU",
+              "name": "appName2",
+              "fill": "#374151",
+              "content": "GoldCleaner",
+              "fontFamily": "Inter",
+              "fontSize": 12,
+              "fontWeight": "600"
+            },
+            {
+              "type": "frame",
+              "id": "t3PXD",
+              "name": "spacer2",
+              "width": 16,
+              "height": 1
+            },
+            {
+              "type": "frame",
+              "id": "xCPe7",
+              "name": "帮助菜单-有更新",
+              "width": 42,
+              "height": 22,
+              "cornerRadius": 4,
+              "layout": "none",
+              "children": [
+                {
+                  "type": "text",
+                  "id": "hKkyV",
+                  "x": 10,
+                  "y": 4,
+                  "name": "menuHelpText2",
+                  "fill": "#374151",
+                  "content": "帮助",
+                  "fontFamily": "Inter",
+                  "fontSize": 12
+                },
+                {
+                  "type": "ellipse",
+                  "id": "3Ao43",
+                  "x": 32,
+                  "y": 2,
+                  "name": "红点",
+                  "fill": "#EF4444",
+                  "width": 6,
+                  "height": 6
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

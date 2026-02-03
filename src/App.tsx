@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
@@ -130,6 +129,7 @@ function App() {
   const [downloadProgress, setDownloadProgress] = useState(0);
 
   // Menu state
+  const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
 
   useEffect(() => {
@@ -168,20 +168,6 @@ function App() {
     checkForUpdate();
   }, []);
 
-  // Listen for menu events from system menu
-  useEffect(() => {
-    const unlisten = listen<string>('menu-event', (event) => {
-      if (event.payload === 'check-update') {
-        handleCheckUpdate();
-      } else if (event.payload === 'about') {
-        setAboutDialogOpen(true);
-      }
-    });
-
-    return () => {
-      unlisten.then(fn => fn());
-    };
-  }, []);
 
   const scanActive = scanning || largeScanning;
 
@@ -638,6 +624,8 @@ function App() {
   const handleCheckUpdate = async () => {
     try {
       setUpdateStatus('checking');
+      setError('');
+      setScanStatus('正在检查更新...');
       const update = await check();
       if (update?.available) {
         setUpdateInfo({
@@ -645,14 +633,22 @@ function App() {
           body: update.body || '新版本已发布，建议立即更新。'
         });
         setUpdateStatus('ready');
+        setScanStatus('');
       } else {
         setUpdateInfo(null);
-        setScanStatus('已是最新版本');
+        setScanStatus('已是最新版本 (v0.5.0)');
         setUpdateStatus('idle');
       }
     } catch (error) {
       console.error('检查更新失败:', error);
-      setError('检查更新失败，请稍后重试');
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      // 显示更详细的错误信息帮助调试
+      if (errorMsg.includes('network') || errorMsg.includes('timeout') || errorMsg.includes('fetch')) {
+        setError('检查更新失败：网络连接问题，请检查网络后重试');
+      } else {
+        setError(`检查更新失败：${errorMsg}`);
+      }
+      setScanStatus('');
       setUpdateStatus('idle');
     }
   };
@@ -697,6 +693,20 @@ function App() {
         <div className="hero-text">
           <h1>C 盘清理工具</h1>
           <p>扫描并清理不必要的文件，释放磁盘空间</p>
+        </div>
+        <div className="hero-actions">
+          <button
+            className="settings-button"
+            onClick={() => setSettingsMenuOpen(!settingsMenuOpen)}
+            title="设置"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden>
+              <circle cx="6" cy="12" r="1.5" />
+              <circle cx="12" cy="12" r="1.5" />
+              <circle cx="18" cy="12" r="1.5" />
+            </svg>
+            {updateInfo && <span className="update-dot" />}
+          </button>
         </div>
       </header>
 
@@ -1086,16 +1096,18 @@ function App() {
         <div className="update-overlay">
           <div className="update-card">
             <div className="update-header">
-              <div className="update-icon">📦</div>
+              <div className="update-icon">🎉</div>
               <div>
                 <div className="update-title">发现新版本</div>
-                <div className="update-version">v{updateInfo.version}</div>
+                <div className="update-version">v{updateInfo.version} 可用</div>
               </div>
             </div>
-            <div className="update-body">{updateInfo.body}</div>
+            <div className="update-body">
+              新版本已发布，建议立即更新以获得最新功能和修复。
+            </div>
             <div className="update-actions">
               <button className="secondary-button" onClick={handleSkipUpdate}>
-                跳过
+                稍后提醒
               </button>
               <button className="primary-button" onClick={handleDownloadAndInstall}>
                 立即更新
@@ -1165,6 +1177,42 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Settings Dropdown */}
+      {settingsMenuOpen && (
+        <>
+          <div className="settings-backdrop" onClick={() => setSettingsMenuOpen(false)} />
+          <div className="settings-dropdown">
+            <button
+              className="settings-item"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                handleCheckUpdate();
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden>
+                <path d="M12 4a8 8 0 1 1-7.4 5M4 4v5h5" />
+              </svg>
+              检查更新
+              {updateInfo && <span className="update-dot menu-dot" />}
+            </button>
+            <div className="settings-divider" />
+            <button
+              className="settings-item"
+              onClick={() => {
+                setSettingsMenuOpen(false);
+                setAboutDialogOpen(true);
+              }}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden>
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 8v4M12 16h.01" />
+              </svg>
+              关于
+            </button>
+          </div>
+        </>
       )}
 
       {/* About Dialog */}
